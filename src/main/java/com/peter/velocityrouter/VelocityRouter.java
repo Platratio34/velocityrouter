@@ -1,5 +1,9 @@
 package com.peter.velocityrouter;
 
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Optional;
@@ -9,6 +13,7 @@ import java.util.concurrent.ExecutionException;
 
 import org.slf4j.Logger;
 
+import com.google.gson.Gson;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
@@ -24,7 +29,6 @@ import com.velocitypowered.api.proxy.server.RegisteredServer;
 import net.kyori.adventure.text.Component;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
-import net.luckperms.api.context.ContextSet;
 import net.luckperms.api.context.MutableContextSet;
 import net.luckperms.api.model.user.User;
 import net.luckperms.api.model.user.UserManager;
@@ -40,6 +44,8 @@ public class VelocityRouter {
 
     protected RoutingTable routingTable;
 
+    protected Config config;
+
     @Inject
     public VelocityRouter(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
         this.proxyServer = server;
@@ -53,21 +59,24 @@ public class VelocityRouter {
     public void onProxyInitialization(ProxyInitializeEvent event) {
         logger.info("Using file-based routing table for Velocity Router");
         routingTable = new FileRoutingTable(dataDirectory.resolve("routing.json"), logger);
+
+        reloadConfig();
     }
 
     protected boolean canJoin(User user, String server) {
         if(user == null)
             return true;
+        if(config == null || config.joinPermission.length() == 0)
+            return true;
         QueryOptions qo = QueryOptions.contextual(MutableContextSet.of("server", server));
         Collection<Node> nodes = user.resolveInheritedNodes(qo);
         for(Node node : nodes) {
-            if(node.getKey().equals("robobouncer.join.server") && node.getValue())
+            if(node.getKey().equals(config.joinPermission) && node.getValue())
                 return true;
         }
         return false;
     }
 
-    private int failCount = 0;
     @Subscribe
     public void onServerChooseEvent(PlayerChooseInitialServerEvent chooseServerEvent) {
         Player player = chooseServerEvent.getPlayer();
@@ -79,8 +88,7 @@ public class VelocityRouter {
             UserManager um = lpApi.getUserManager();
             user = um.loadUser(player.getUniqueId()).join();
         } catch (IllegalStateException e) {
-            if(failCount++ % 4 == 0)
-                logger.warn("Could not load luckperms API, no permission checks will happen");
+            logger.warn("Could not load luckperms API, no permission checks will happen");
         }
 
         if(routingTable != null) { 
@@ -151,6 +159,27 @@ public class VelocityRouter {
             logger.debug("Storing last server of {} for player {} in {}", serverConnectedEvent.getServer().getServerInfo().getName(), serverConnectedEvent.getPlayer().getUsername(), serverConnectedEvent.getPlayer().getProtocolVersion().name());
         } else {
             logger.warn("Missing routing table: Last server will not be saved");
+        }
+    }
+
+    public void reloadConfig() {
+        Gson gson = new Gson();
+        File f = dataDirectory.resolve("config.json").toFile();
+        if(!f.exists()) {
+            logger.warn("Could not find config, creating one");
+            config = new Config();
+            try (FileWriter writer = new FileWriter(f)) {
+                gson.toJson(config, writer);
+            } catch (IOException e) {
+                logger.error("Error creating config", e);
+            }
+            return;
+        }
+        try (FileReader reader = new FileReader(f)) {
+            config = gson.fromJson(reader, Config.class);
+            logger.info("Velocity router config loaded");
+        } catch (IOException e) {
+            logger.error("Error loading config", e);
         }
     }
 }

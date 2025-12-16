@@ -55,7 +55,9 @@ public class FileRoutingTable implements RoutingTable {
             if(!data.lastServers.containsKey(playerId)) {
                 data.lastServers.put(playerId, new PlayerRoutingTable(player));
             }
-            data.lastServers.get(playerId).set(playerVersion, serverId);
+            PlayerRoutingTable prt = data.lastServers.get(playerId);
+            prt.set(playerVersion, serverId);
+            prt.username = player.getUsername();
         } catch (IOException e) {
             logger.error("Error loading routing table for save", e);
             return;
