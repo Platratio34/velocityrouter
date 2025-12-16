@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.Optional;
@@ -57,6 +58,12 @@ public class VelocityRouter {
 
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
+        try {
+            Files.createDirectories(dataDirectory);
+        } catch (IOException e) {
+            logger.error("Could not create data directory for plugin", e);
+        }
+
         logger.info("Using file-based routing table for Velocity Router");
         routingTable = new FileRoutingTable(dataDirectory.resolve("routing.json"), logger);
 
@@ -102,7 +109,7 @@ public class VelocityRouter {
                             try {
                                 server.ping().join();
                                 chooseServerEvent.setInitialServer(server);
-                                logger.debug("Routig player {} in {} to server {}", player.getUsername(), playerVersion.name(), server.getServerInfo().getName());
+                                logger.debug("Routing player {} in {} to server {}", player.getUsername(), playerVersion.name(), server.getServerInfo().getName());
                                 return;
                             } catch(CancellationException|CompletionException exception) {
                                 logger.error(String.format("Unable to route %s to their last server of %s; using fallback", player.getUsername(), server.getServerInfo().getName()), exception);
@@ -164,7 +171,8 @@ public class VelocityRouter {
 
     public void reloadConfig() {
         Gson gson = new Gson();
-        File f = dataDirectory.resolve("config.json").toFile();
+        Path configPath = dataDirectory.resolve("config.json");
+        File f = configPath.toFile();
         if(!f.exists()) {
             logger.warn("Could not find config, creating one");
             config = new Config();

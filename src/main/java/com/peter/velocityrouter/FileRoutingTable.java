@@ -1,5 +1,6 @@
 package com.peter.velocityrouter;
 
+import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
@@ -30,7 +31,10 @@ public class FileRoutingTable implements RoutingTable {
         UUID playerId = player.getUniqueId();
 
         Gson gson = new Gson();
-        try (FileReader reader = new FileReader(path.toFile())) {
+        File f = path.toFile();
+        if (!f.exists())
+            return "";
+        try (FileReader reader = new FileReader(f)) {
             RoutingTableFile data = gson.fromJson(reader, RoutingTableFile.class);
             if(!data.lastServers.containsKey(playerId))
                 return "";
@@ -50,19 +54,26 @@ public class FileRoutingTable implements RoutingTable {
 
         Gson gson = new Gson();
         RoutingTableFile data;
-        try (FileReader reader = new FileReader(path.toFile())) {
-            data = gson.fromJson(reader, RoutingTableFile.class);
-            if(!data.lastServers.containsKey(playerId)) {
-                data.lastServers.put(playerId, new PlayerRoutingTable(player));
+        File f = path.toFile();
+        if (f.exists()) {
+            try (FileReader reader = new FileReader(f)) {
+                data = gson.fromJson(reader, RoutingTableFile.class);
+            } catch (IOException e) {
+                logger.error("Error loading routing table for save", e);
+                return;
             }
-            PlayerRoutingTable prt = data.lastServers.get(playerId);
-            prt.set(playerVersion, serverId);
-            prt.username = player.getUsername();
-        } catch (IOException e) {
-            logger.error("Error loading routing table for save", e);
-            return;
+        } else {
+            data = RoutingTableFile.create();
         }
-        try (FileWriter writer = new FileWriter(path.toFile())) {
+        
+        if(!data.lastServers.containsKey(playerId)) {
+            data.lastServers.put(playerId, new PlayerRoutingTable(player));
+        }
+        PlayerRoutingTable prt = data.lastServers.get(playerId);
+        prt.set(playerVersion, serverId);
+        prt.username = player.getUsername();
+
+        try (FileWriter writer = new FileWriter(f)) {
             gson.toJson(data, writer);
         } catch (IOException e) {
             logger.error("Error saving routing table", e);

@@ -10,6 +10,12 @@ public class RoutingTableFile {
 
     public HashMap<UUID, PlayerRoutingTable> lastServers;
 
+    static RoutingTableFile create() {
+        RoutingTableFile f = new RoutingTableFile();
+        f.lastServers = new HashMap<>();
+        return f;
+    }
+
     public static class PlayerRoutingTable {
         public String username;
         public HashMap<String, String> lastServer;
@@ -24,7 +30,7 @@ public class RoutingTableFile {
         }
 
         public String get(ProtocolVersion version) {
-            return lastServer.get(version.name());
+            return lastServer.getOrDefault(version.name(), "");
         }
 
         public void set(ProtocolVersion playerVersion, String serverId) {
