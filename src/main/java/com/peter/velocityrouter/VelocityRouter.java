@@ -1,6 +1,7 @@
 package com.peter.velocityrouter;
 
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
@@ -21,6 +22,14 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 
 import net.kyori.adventure.text.Component;
+import net.luckperms.api.LuckPerms;
+import net.luckperms.api.LuckPermsProvider;
+import net.luckperms.api.context.ContextSet;
+import net.luckperms.api.context.MutableContextSet;
+import net.luckperms.api.model.user.User;
+import net.luckperms.api.model.user.UserManager;
+import net.luckperms.api.node.Node;
+import net.luckperms.api.query.QueryOptions;
 
 @Plugin(id = "velocityrouter", name = "Velocity Router", version = "1.0-SNAPSHOT", authors = {"Platratio34"})
 public class VelocityRouter {
@@ -46,14 +55,37 @@ public class VelocityRouter {
         routingTable = new FileRoutingTable(dataDirectory.resolve("routing.json"), logger);
     }
 
+    protected boolean canJoin(User user, String server) {
+        if(user == null)
+            return true;
+        QueryOptions qo = QueryOptions.contextual(MutableContextSet.of("server", server));
+        Collection<Node> nodes = user.resolveInheritedNodes(qo);
+        for(Node node : nodes) {
+            if(node.getKey().equals("robobouncer.join.server") && node.getValue())
+                return true;
+        }
+        return false;
+    }
+
+    private int failCount = 0;
     @Subscribe
     public void onServerChooseEvent(PlayerChooseInitialServerEvent chooseServerEvent) {
         Player player = chooseServerEvent.getPlayer();
         ProtocolVersion playerVersion = player.getProtocolVersion();
 
+        User user = null;
+        try {
+            LuckPerms lpApi = LuckPermsProvider.get();
+            UserManager um = lpApi.getUserManager();
+            user = um.loadUser(player.getUniqueId()).join();
+        } catch (IllegalStateException e) {
+            if(failCount++ % 4 == 0)
+                logger.warn("Could not load luckperms API, no permission checks will happen");
+        }
+
         if(routingTable != null) { 
             String serverId = routingTable.getServerForPlayer(player);
-            if(!serverId.equals("")) {
+            if(!serverId.equals("") && canJoin(user, serverId)) {
                 Optional<RegisteredServer> opt = proxyServer.getServer(serverId);
                 if(opt.isPresent()) {
                     RegisteredServer server = opt.get();
@@ -80,7 +112,7 @@ public class VelocityRouter {
         if(chooseServerEvent.getInitialServer().isPresent()) {
             RegisteredServer server = chooseServerEvent.getInitialServer().get();
             try {
-                if(server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
                     try {
                         server.ping().join();
                         chooseServerEvent.setInitialServer(server);
@@ -95,7 +127,7 @@ public class VelocityRouter {
 
         for(RegisteredServer server : proxyServer.getAllServers()) {
             try {
-                if(server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
                     try {
                         server.ping().join();
                         chooseServerEvent.setInitialServer(server);
