@@ -90,12 +90,47 @@ public class VelocityRouter {
         ProtocolVersion playerVersion = player.getProtocolVersion();
 
         User user = null;
-        try {
-            LuckPerms lpApi = LuckPermsProvider.get();
-            UserManager um = lpApi.getUserManager();
-            user = um.loadUser(player.getUniqueId()).join();
-        } catch (IllegalStateException e) {
-            logger.warn("Could not load luckperms API, no permission checks will happen");
+        if (config.useLP) {
+            try {
+                LuckPerms lpApi = LuckPermsProvider.get();
+                UserManager um = lpApi.getUserManager();
+                user = um.loadUser(player.getUniqueId()).join();
+            } catch (IllegalStateException e) {
+                logger.warn("Could not load luckperms API, no permission checks will happen");
+            }
+        }
+
+        if (user != null) {
+            QueryOptions qo = QueryOptions.nonContextual();
+            Collection<Node> nodes = user.resolveInheritedNodes(qo);
+            boolean had = false;
+            for (Node node : nodes) {
+                if (node.getKey().equals(config.joinPermission) && node.getValue()) {
+                    had = true;
+                    break;
+                }
+            }
+            if (!had) {
+                logger.warn("Could not find a server for player {} in {}", player.getUsername(), playerVersion.name());
+                player.disconnect(Component.text(config.noPermDisconnect));
+                return;
+            }
+        }
+
+        if(chooseServerEvent.getInitialServer().isPresent()) {
+            RegisteredServer server = chooseServerEvent.getInitialServer().get();
+            try {
+                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                    try {
+                        server.ping().join();
+                        chooseServerEvent.setInitialServer(server);
+                        logger.info("Had no last server for {} in {}, redirecting to default of server {}", player.getUsername(), playerVersion.name(), server.getServerInfo().getName());
+                        return;
+                    } catch(CancellationException|CompletionException exception) {
+                    }
+                }
+            } catch (InterruptedException | ExecutionException e) {
+            }
         }
 
         if(routingTable != null) { 
@@ -124,22 +159,6 @@ public class VelocityRouter {
             logger.warn("Missing routing table: Last server can not be loaded");
         }
 
-        if(chooseServerEvent.getInitialServer().isPresent()) {
-            RegisteredServer server = chooseServerEvent.getInitialServer().get();
-            try {
-                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
-                    try {
-                        server.ping().join();
-                        chooseServerEvent.setInitialServer(server);
-                        logger.info("Had no last server for {} in {}, redirecting to default of server {}", player.getUsername(), playerVersion.name(), server.getServerInfo().getName());
-                        return;
-                    } catch(CancellationException|CompletionException exception) {
-                    }
-                }
-            } catch (InterruptedException | ExecutionException e) {
-            }
-        }
-
         for(RegisteredServer server : proxyServer.getAllServers()) {
             try {
                 if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
@@ -156,7 +175,7 @@ public class VelocityRouter {
         }
 
         logger.warn("Could not find a server for player {} in {}", player.getUsername(), playerVersion.name());
-        player.disconnect(Component.text("There are no servers on this network that you can connect to in your current Minecraft version."));
+        player.disconnect(Component.text(config.noServerDisconnect));
     }
 
     @Subscribe
