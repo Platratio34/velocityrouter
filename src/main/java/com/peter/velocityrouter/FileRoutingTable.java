@@ -80,4 +80,37 @@ public class FileRoutingTable implements RoutingTable {
         }
     }
 
+    @Override
+    public void removeLastServerForPlayer(Player player) {
+        ProtocolVersion playerVersion = player.getProtocolVersion();
+        UUID playerId = player.getUniqueId();
+
+        Gson gson = new Gson();
+        RoutingTableFile data;
+        File f = path.toFile();
+        if (f.exists()) {
+            try (FileReader reader = new FileReader(f)) {
+                data = gson.fromJson(reader, RoutingTableFile.class);
+            } catch (IOException e) {
+                logger.error("Error loading routing table for save", e);
+                return;
+            }
+        } else {
+            data = RoutingTableFile.create();
+        }
+        
+        if(!data.lastServers.containsKey(playerId)) {
+            data.lastServers.put(playerId, new PlayerRoutingTable(player));
+        }
+        PlayerRoutingTable prt = data.lastServers.get(playerId);
+        prt.remove(playerVersion);
+        prt.username = player.getUsername();
+
+        try (FileWriter writer = new FileWriter(f)) {
+            gson.toJson(data, writer);
+        } catch (IOException e) {
+            logger.error("Error saving routing table", e);
+        }
+    }
+
 }

@@ -8,4 +8,6 @@ public interface RoutingTable {
     public String getServerForPlayer(Player player);
     
     public void setLast(Player player, RegisteredServer server);
+
+    public void removeLastServerForPlayer(Player player);
 }

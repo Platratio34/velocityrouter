@@ -15,7 +15,9 @@ import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.inject.Inject;
+import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
@@ -36,7 +38,7 @@ import net.luckperms.api.model.user.UserManager;
 import net.luckperms.api.node.Node;
 import net.luckperms.api.query.QueryOptions;
 
-@Plugin(id = "velocityrouter", name = "Velocity Router", version = "1.0-SNAPSHOT", authors = {"Platratio34"})
+@Plugin(id = "velocityrouter", name = "Velocity Router", version = "1.1.1", authors = {"Platratio34"})
 public class VelocityRouter {
 
     public final ProxyServer proxyServer;
@@ -46,6 +48,12 @@ public class VelocityRouter {
     protected RoutingTable routingTable;
 
     protected Config config;
+
+    protected static final Gson gson = new GsonBuilder()
+            .registerTypeAdapter(ForcedHostSet.class, new ForcedHostSet.ForcedHostSetSerializer())
+            .registerTypeAdapter(ForcedHostSet.class, new ForcedHostSet.ForcedHostSetDeserializer())
+            .setPrettyPrinting()
+            .create();
 
     @Inject
     public VelocityRouter(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
@@ -67,18 +75,21 @@ public class VelocityRouter {
         logger.info("Using file-based routing table for Velocity Router");
         routingTable = new FileRoutingTable(dataDirectory.resolve("routing.json"), logger);
 
+        CommandMeta commandMeta = proxyServer.getCommandManager().metaBuilder("velocityrouter").plugin(this).build();
+        proxyServer.getCommandManager().register(commandMeta, RouterCommand.create(this));
+
         reloadConfig();
     }
 
     protected boolean canJoin(User user, String server) {
-        if(user == null)
+        if (user == null)
             return true;
-        if(config == null || config.joinPermission.length() == 0)
+        if (config == null || config.joinPermission.length() == 0)
             return true;
         QueryOptions qo = QueryOptions.contextual(MutableContextSet.of("server", server));
         Collection<Node> nodes = user.resolveInheritedNodes(qo);
-        for(Node node : nodes) {
-            if(node.getKey().equals(config.joinPermission) && node.getValue())
+        for (Node node : nodes) {
+            if (node.getKey().equals(config.joinPermission) && node.getValue())
                 return true;
         }
         return false;
@@ -117,19 +128,38 @@ public class VelocityRouter {
             }
         }
 
-        if(chooseServerEvent.getInitialServer().isPresent()) {
-            RegisteredServer server = chooseServerEvent.getInitialServer().get();
-            try {
-                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+        // logger.info("DEBUG: Player join");
+        // logger.info("DEBUG: host {}", chooseServerEvent.getPlayer().getRawVirtualHost());
+        // if (chooseServerEvent.getInitialServer().isPresent()) {
+        //     RegisteredServer server = chooseServerEvent.getInitialServer().get();
+        //     logger.info("DEBUG: initial server {}", server.getServerInfo().getName());
+        // }
+
+        Optional<String> host = chooseServerEvent.getPlayer().getRawVirtualHost();
+        if (host.isPresent() && config.forcedHostSet.has(host.get())) {
+            String serverId = config.forcedHostSet.get(host.get());
+            logger.debug("Player {} had a forced server {}", player.getUsername(), serverId);
+            if(!serverId.equals("") && canJoin(user, serverId)) {
+                Optional<RegisteredServer> opt = proxyServer.getServer(serverId);
+                if(opt.isPresent()) {
+                    RegisteredServer server = opt.get();
                     try {
-                        server.ping().join();
-                        chooseServerEvent.setInitialServer(server);
-                        logger.info("Had no last server for {} in {}, redirecting to default of server {}", player.getUsername(), playerVersion.name(), server.getServerInfo().getName());
-                        return;
-                    } catch(CancellationException|CompletionException exception) {
+                        if(server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                            try {
+                                server.ping().join();
+                                chooseServerEvent.setInitialServer(server);
+                                logger.debug("Routing player {} in {} to forced server {}", player.getUsername(), playerVersion.name(), server.getServerInfo().getName());
+                                return;
+                            } catch(CancellationException|CompletionException exception) {
+                                logger.error(String.format("Unable to route %s to forced server of %s; using fallback", player.getUsername(), server.getServerInfo().getName()), exception);
+                            }
+                        } else {
+                            logger.warn("Unable to route {} to forced server of {}: incompatible version;", player.getUsername(), server.getServerInfo().getName());
+                        }
+                    } catch (InterruptedException | ExecutionException e) {
+                        logger.error(String.format("Unable to route %s to forced server of %s; using fallback", player.getUsername(), server.getServerInfo().getName()), e);
                     }
                 }
-            } catch (InterruptedException | ExecutionException e) {
             }
         }
 
@@ -149,6 +179,10 @@ public class VelocityRouter {
                             } catch(CancellationException|CompletionException exception) {
                                 logger.error(String.format("Unable to route %s to their last server of %s; using fallback", player.getUsername(), server.getServerInfo().getName()), exception);
                             }
+                        } else {
+                            logger.warn("Unable to route {} to their last server of {}: incompatible version;",
+                                    player.getUsername(), server.getServerInfo().getName());
+                            routingTable.removeLastServerForPlayer(player);
                         }
                     } catch (InterruptedException | ExecutionException e) {
                         logger.error(String.format("Unable to route %s to their last server of %s; using fallback", player.getUsername(), server.getServerInfo().getName()), e);
@@ -157,6 +191,22 @@ public class VelocityRouter {
             }
         } else {
             logger.warn("Missing routing table: Last server can not be loaded");
+        }
+
+        if(chooseServerEvent.getInitialServer().isPresent()) {
+            RegisteredServer server = chooseServerEvent.getInitialServer().get();
+            try {
+                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                    try {
+                        server.ping().join();
+                        chooseServerEvent.setInitialServer(server);
+                        logger.info("Had no last server for {} in {}, redirecting to default of server {}", player.getUsername(), playerVersion.name(), server.getServerInfo().getName());
+                        return;
+                    } catch(CancellationException|CompletionException exception) {
+                    }
+                }
+            } catch (InterruptedException | ExecutionException e) {
+            }
         }
 
         for(RegisteredServer server : proxyServer.getAllServers()) {
@@ -189,10 +239,9 @@ public class VelocityRouter {
     }
 
     public void reloadConfig() {
-        Gson gson = new Gson();
         Path configPath = dataDirectory.resolve("config.json");
         File f = configPath.toFile();
-        if(!f.exists()) {
+        if (!f.exists()) {
             logger.warn("Could not find config, creating one");
             config = new Config();
             try (FileWriter writer = new FileWriter(f)) {
@@ -209,4 +258,6 @@ public class VelocityRouter {
             logger.error("Error loading config", e);
         }
     }
+    
+
 }

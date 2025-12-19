@@ -36,5 +36,9 @@ public class RoutingTableFile {
         public void set(ProtocolVersion playerVersion, String serverId) {
             lastServer.put(playerVersion.name(), serverId);
         }
+
+        public void remove(ProtocolVersion playerVersion) {
+            lastServer.remove(playerVersion.name());
+        }
     }
 }
