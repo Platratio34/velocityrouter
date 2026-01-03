@@ -19,8 +19,10 @@ import com.google.gson.GsonBuilder;
 import com.google.inject.Inject;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
+import com.velocitypowered.api.event.player.KickedFromServerEvent.ServerKickResult;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.api.plugin.Plugin;
@@ -38,7 +40,7 @@ import net.luckperms.api.model.user.UserManager;
 import net.luckperms.api.node.Node;
 import net.luckperms.api.query.QueryOptions;
 
-@Plugin(id = "velocityrouter", name = "Velocity Router", version = "1.1.1", authors = {"Platratio34"})
+@Plugin(id = "velocityrouter", name = "Velocity Router", version = "1.2.0", authors = {"Platratio34"})
 public class VelocityRouter {
 
     public final ProxyServer proxyServer;
@@ -230,12 +232,73 @@ public class VelocityRouter {
 
     @Subscribe
     public void onServerChange(ServerConnectedEvent serverConnectedEvent) {
-        if(routingTable != null) {
+        if (routingTable != null) {
             routingTable.setLast(serverConnectedEvent.getPlayer(), serverConnectedEvent.getServer());
-            logger.debug("Storing last server of {} for player {} in {}", serverConnectedEvent.getServer().getServerInfo().getName(), serverConnectedEvent.getPlayer().getUsername(), serverConnectedEvent.getPlayer().getProtocolVersion().name());
+            logger.debug("Storing last server of {} for player {} in {}",
+                    serverConnectedEvent.getServer().getServerInfo().getName(),
+                    serverConnectedEvent.getPlayer().getUsername(),
+                    serverConnectedEvent.getPlayer().getProtocolVersion().name());
         } else {
             logger.warn("Missing routing table: Last server will not be saved");
         }
+    }
+
+    @Subscribe
+    public void onKickedFromServer(KickedFromServerEvent kickedFromServerEvent) {
+        Player player = kickedFromServerEvent.getPlayer();
+        ProtocolVersion playerVersion = player.getProtocolVersion();
+
+        String kickedServerName = kickedFromServerEvent.getServer().getServerInfo().getName();
+        Optional<Component> reasonOpt = kickedFromServerEvent.getServerKickReason();
+        Component reasonComponent = reasonOpt.isPresent() ? reasonOpt.get() : Component.text("Unknown");
+
+        User user = null;
+        if (config.useLP) {
+            try {
+                LuckPerms lpApi = LuckPermsProvider.get();
+                UserManager um = lpApi.getUserManager();
+                user = um.loadUser(player.getUniqueId()).join();
+            } catch (IllegalStateException e) {
+                logger.warn("Could not load luckperms API, no permission checks will happen");
+            }
+        }
+
+        boolean hadInVersion = false;
+        for (RegisteredServer server : proxyServer.getAllServers()) {
+            if (server == kickedFromServerEvent.getServer())
+                continue;
+            try {
+                if (server.ping().get().getVersion().getProtocol() != playerVersion.getProtocol())
+                    continue;
+                hadInVersion = true;
+                if(canJoin(user, server.getServerInfo().getName())) {
+                    try {
+                        server.ping();
+                        kickedFromServerEvent.setResult(KickedFromServerEvent.RedirectPlayer.create(server));
+                        logger.info("{} kicked from {} in {}, redirecting to server {}", player.getUsername(), kickedServerName, playerVersion.name(), server.getServerInfo().getName());
+                        return;
+                    } catch(CancellationException|CompletionException exception) {
+                    }
+                }
+            } catch (InterruptedException | ExecutionException e) {
+            }
+        }
+
+        logger.warn("Could not find a server for player {} in {} after kick from {}", player.getUsername(),
+                playerVersion.name(), kickedServerName);
+        // player.disconnect(Component.text(config.noServerDisconnect));
+        if(!hadInVersion)
+            logger.warn("- No other servers in version");
+
+        Component disconnectMsg = Component
+                .text(String.format("You were kicked from server %s because \"", kickedServerName));
+        disconnectMsg.append(reasonComponent);
+        if(hadInVersion)
+            disconnectMsg.append(Component.text("\" and there was no other server on the network in your version you are allowed to join"));
+        else
+            disconnectMsg.append(Component.text("\" and there was no other server on the network in your version"));
+        
+        kickedFromServerEvent.setResult(KickedFromServerEvent.DisconnectPlayer.create(disconnectMsg));
     }
 
     public void reloadConfig() {
