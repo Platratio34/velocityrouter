@@ -30,6 +30,7 @@ import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.proxy.server.ServerPing.Version;
 
 import net.kyori.adventure.text.Component;
 import net.luckperms.api.LuckPerms;
@@ -101,6 +102,7 @@ public class VelocityRouter {
     public void onServerChooseEvent(PlayerChooseInitialServerEvent chooseServerEvent) {
         Player player = chooseServerEvent.getPlayer();
         ProtocolVersion playerVersion = player.getProtocolVersion();
+        SearchResult searchResult = new SearchResult();
 
         User user = null;
         if (config.useLP) {
@@ -114,6 +116,7 @@ public class VelocityRouter {
         }
 
         if (user != null) {
+            // just check if they are allowed connect to *any* server
             QueryOptions qo = QueryOptions.nonContextual();
             Collection<Node> nodes = user.resolveInheritedNodes(qo);
             boolean had = false;
@@ -124,7 +127,7 @@ public class VelocityRouter {
                 }
             }
             if (!had) {
-                logger.warn("Could not find a server for player {} in {}", player.getUsername(), playerVersion.name());
+                logger.warn("Could not find a server for player {} in {}; Not allowed to join any server", player.getUsername(), playerVersion.name());
                 player.disconnect(Component.text(config.noPermDisconnect));
                 return;
             }
@@ -146,7 +149,9 @@ public class VelocityRouter {
                 if(opt.isPresent()) {
                     RegisteredServer server = opt.get();
                     try {
-                        if(server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                        Version v = server.ping().get().getVersion();
+                        searchResult.add(v);
+                        if(v.getProtocol() == playerVersion.getProtocol()) {
                             try {
                                 server.ping().join();
                                 chooseServerEvent.setInitialServer(server);
@@ -159,6 +164,7 @@ public class VelocityRouter {
                             logger.warn("Unable to route {} to forced server of {}: incompatible version;", player.getUsername(), server.getServerInfo().getName());
                         }
                     } catch (InterruptedException | ExecutionException e) {
+                        searchResult.error();
                         logger.error(String.format("Unable to route %s to forced server of %s; using fallback", player.getUsername(), server.getServerInfo().getName()), e);
                     }
                 }
@@ -172,7 +178,9 @@ public class VelocityRouter {
                 if(opt.isPresent()) {
                     RegisteredServer server = opt.get();
                     try {
-                        if(server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                        Version v = server.ping().get().getVersion();
+                        searchResult.add(v);
+                        if(v.getProtocol() == playerVersion.getProtocol()) {
                             try {
                                 server.ping().join();
                                 chooseServerEvent.setInitialServer(server);
@@ -187,6 +195,7 @@ public class VelocityRouter {
                             routingTable.removeLastServerForPlayer(player);
                         }
                     } catch (InterruptedException | ExecutionException e) {
+                        searchResult.error();
                         logger.error(String.format("Unable to route %s to their last server of %s; using fallback", player.getUsername(), server.getServerInfo().getName()), e);
                     }
                 }
@@ -198,7 +207,9 @@ public class VelocityRouter {
         if(chooseServerEvent.getInitialServer().isPresent()) {
             RegisteredServer server = chooseServerEvent.getInitialServer().get();
             try {
-                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                Version v = server.ping().get().getVersion();
+                searchResult.add(v);
+                if(canJoin(user, server.getServerInfo().getName()) && v.getProtocol() == playerVersion.getProtocol()) {
                     try {
                         server.ping().join();
                         chooseServerEvent.setInitialServer(server);
@@ -208,12 +219,15 @@ public class VelocityRouter {
                     }
                 }
             } catch (InterruptedException | ExecutionException e) {
+                searchResult.error();
             }
         }
 
         for(RegisteredServer server : proxyServer.getAllServers()) {
             try {
-                if(canJoin(user, server.getServerInfo().getName()) && server.ping().get().getVersion().getProtocol() == playerVersion.getProtocol()) {
+                Version v = server.ping().get().getVersion();
+                searchResult.add(v);
+                if(canJoin(user, server.getServerInfo().getName()) && v.getProtocol() == playerVersion.getProtocol()) {
                     try {
                         server.ping().join();
                         chooseServerEvent.setInitialServer(server);
@@ -223,10 +237,12 @@ public class VelocityRouter {
                     }
                 }
             } catch (InterruptedException | ExecutionException e) {
+                searchResult.error();
             }
         }
 
         logger.warn("Could not find a server for player {} in {}", player.getUsername(), playerVersion.name());
+        logger.warn(searchResult.out());
         player.disconnect(Component.text(config.noServerDisconnect));
     }
 
